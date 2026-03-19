@@ -1,2 +1,2 @@
-# ieee80211a-ofdm-pipeline
-A complete IEEE 802.11a OFDM transceiver implemented as a visual block diagram pipeline with GPU-accelerated Viterbi decoding
+# visual-pipeline-editor
+Drag-and-drop pipeline editor for designing and running multi-block dataflow systems
