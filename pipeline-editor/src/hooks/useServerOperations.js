@@ -41,53 +41,12 @@ const isCudaBlock = (block) => {
 
 // -----------------------------------------------------------------------
 // Build the compile command for a single C++ / CUDA block.
-//
-// For CUDA blocks (.cu):
-//   nvcc -o bin/<name>.exe <file>.cu -lws2_32 -O3 -arch=sm_86 -std=c++17
-//
-// For regular C++ blocks (.cpp):
-//   g++ -fopenmp -o bin/<name>.exe <file>.cpp -lws2_32 -O3 -march=native -std=c++17
-//
-// The CUDA architecture (-arch) is set to sm_86 (RTX 3000/A-series) by default.
-// Override by setting the CUDA_ARCH environment variable in your shell, e.g.:
-//   CUDA_ARCH=sm_89   (RTX 4090)
-//   CUDA_ARCH=sm_80   (A100)
-//   CUDA_ARCH=sm_75   (RTX 2000)
-//   CUDA_ARCH=sm_70   (V100)
 // -----------------------------------------------------------------------
 const buildCompileCommand = (block, projectDir) => {
   const exeName = block.fileName.replace(/\.(cpp|cu)$/i, '.exe');
 
   if (isCudaBlock(block)) {
-    const cudaArch = 'sm_86';  // Change to match your GPU: sm_75, sm_80, sm_86, sm_89, sm_90
-
-    // nvcc on Windows requires MSVC (cl.exe) — we wrap the call in a
-    // VsDevCmd.bat environment initialisation so nvcc can find cl.exe
-    // regardless of whether the user launched from a Developer Prompt.
-    //
-    // Flags:
-    //   -O3 / -O2          : optimisation (nvcc passes -O2 to cl.exe via -Xcompiler)
-    //   -arch=<sm>         : target GPU SM version
-    //   -std=c++17         : C++17
-    //   -lws2_32           : Winsock
-    //   -Xcompiler /W0     : suppress MSVC warnings (no quotes needed here)
-    //   --expt-relaxed-constexpr : allow constexpr in device code
-    //   -I.                : so #include "core/run_generic_block.h" resolves
-
-    // Find VsDevCmd.bat — try the two most common VS installation paths.
-    // If neither exists nvcc will still attempt to compile but may error on cl.exe.
-    const vsDevCmdPaths = [
-      `"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\VsDevCmd.bat"`,
-      `"C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\Tools\\VsDevCmd.bat"`,
-      `"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\Common7\\Tools\\VsDevCmd.bat"`,
-      `"C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\Common7\\Tools\\VsDevCmd.bat"`,
-    ];
-
-    // We emit a cmd chain: try each VsDevCmd in order, fall through to bare nvcc if none found.
-    // Simpler approach: just call vcvars64.bat if it exists, otherwise run nvcc directly.
-    // The cleanest portable solution is to use `cmd /C "call VsDevCmd.bat 2>nul & nvcc ..."`.
-    // We try the most common path and silently ignore if not found (2>nul).
-    // Try Professional edition first (detected from user environment), then Community/BuildTools
+    const cudaArch = 'sm_86';
     const vcvars = `"C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional\\VC\\Auxiliary\\Build\\vcvars64.bat"`;
 
     const nvccCmd =
@@ -99,9 +58,6 @@ const buildCompileCommand = (block, projectDir) => {
       `-diag-suppress 177 ` +
       `--expt-relaxed-constexpr`;
 
-    // Wrap in cmd so we can chain vcvars64 initialisation before nvcc.
-    // `call vcvars64.bat 2>nul` silently fails if the path doesn't exist,
-    // then nvcc runs anyway (works if nvcc + cl.exe are already on PATH).
     return `cmd /C "call ${vcvars} 2>nul & ${nvccCmd}"`;
   }
 
@@ -158,7 +114,6 @@ export const useServerOperations = ({
     }
 
     if (block.language === 'cpp') {
-      // Support both .cpp and .cu extensions — exe name strips either
       const exeName = block.fileName.replace(/\.(cpp|cu)$/i, '.exe');
       const inputConns = connections.filter(c => c.toBlock === block.id).sort((a, b) => a.toPort - b.toPort);
       const outputConns = connections.filter(c => c.fromBlock === block.id).sort((a, b) => a.fromPort - b.fromPort);
@@ -247,7 +202,8 @@ export const useServerOperations = ({
       // ── Compile C++ / CUDA blocks ──────────────────────────────────────────
       const cppBlocks = blocks.filter(b => b.language === 'cpp');
       if (cppBlocks.length > 0) {
-        addLog('info', `Found ${cppBlocks.length} C++/CUDA block(s) to compile...`);
+        addLog('info', `Found ${cppBlocks.length} C++/CUDA block(s) to process...`);
+
         for (const block of cppBlocks) {
           if (startupCancelledRef.current) { addLog('warning', 'Startup cancelled by user'); return; }
 
@@ -257,14 +213,27 @@ export const useServerOperations = ({
           const compiler = isCuda ? 'nvcc' : 'g++';
           const label    = isCuda ? 'CUDA' : 'C++';
 
-          addLog('info', `Checking ${block.name} [${label}] | startWithAll=${block.startWithAll}`);
+          addLog('info', `Checking ${block.name} [${label}] | startWithAll=${block.startWithAll} | recompile=${!!block.recompile}`);
 
-          try {
-            await window.electronAPI.readFile(exePath);
-            addLog('success', `Found existing ${exeName} in bin/ - skipping`);
-          } catch (e) {
-            addLog('info', `Compiling ${block.fileName} [${label}] to bin/ using ${compiler}...`);
+          // ── Decide whether to compile ────────────────────────────────────
+          let needsCompile = true;
 
+          if (!block.recompile) {
+            // recompile is OFF — use cached binary if it exists
+            try {
+              await window.electronAPI.readFile(exePath);
+              addLog('success', `Found existing ${exeName} in bin/ - skipping (recompile=off)`);
+              needsCompile = false;
+            } catch (e) {
+              // exe not on disk — must compile regardless
+              addLog('info', `No cached binary found for ${block.name} — compiling...`);
+            }
+          } else {
+            // recompile is ON — always rebuild
+            addLog('info', `Recompile enabled for ${block.name} — forcing rebuild`);
+          }
+
+          if (needsCompile) {
             // Write the source file to disk first
             await window.electronAPI.writeFile(
               `${projectDir}/cpp_blocks/${block.fileName}`,
@@ -284,7 +253,6 @@ export const useServerOperations = ({
               }
               addLog('info', `nvcc found: ${(nvccCheck.stdout || '').split('\n')[0].trim()}`);
 
-              // Check if cl.exe (MSVC) is accessible
               const clCheck = await window.electronAPI.execCommand('cl.exe 2>&1 | findstr /i "version"', projectDir);
               if (!clCheck.success && !clCheck.stdout) {
                 addLog('warning',
@@ -306,16 +274,9 @@ export const useServerOperations = ({
             );
 
             if (!r.success) {
-              // Log the full stderr so the real compiler error is visible in the UI
-              if (r.stderr) {
-                addLog('error', `${label} compiler output:\n${r.stderr}`);
-              }
-              if (r.stdout) {
-                addLog('error', `${label} compiler stdout:\n${r.stdout}`);
-              }
-              throw new Error(
-                `${label} compilation failed for ${block.fileName}:\n${r.stderr || r.error}`
-              );
+              if (r.stderr) addLog('error', `${label} compiler output:\n${r.stderr}`);
+              if (r.stdout) addLog('error', `${label} compiler stdout:\n${r.stdout}`);
+              throw new Error(`${label} compilation failed for ${block.fileName}:\n${r.stderr || r.error}`);
             }
             addLog('success', `Compiled ${block.fileName} → bin/${exeName}`);
           }
@@ -582,6 +543,49 @@ export const useServerOperations = ({
         await window.electronAPI.writeFile(`${projectDir}/matlab_blocks/${block.fileName}`, block.code);
       } else if (block.language === 'cpp') {
         await window.electronAPI.writeFile(`${projectDir}/cpp_blocks/${block.fileName}`, block.code);
+
+        // ── Compile if needed ──────────────────────────────────────────────
+        const exeName = block.fileName.replace(/\.(cpp|cu)$/i, '.exe');
+        const exePath = `${projectDir}/cpp_blocks/bin/${exeName}`;
+        const compiler = isCudaBlock(block) ? 'nvcc' : 'g++';
+
+        let needsCompile = true;
+        if (!block.recompile) {
+          try {
+            await window.electronAPI.readFile(exePath);
+            addLog('success', `Found existing ${exeName} in bin/ - skipping (recompile=off)`);
+            needsCompile = false;
+          } catch (e) {
+            addLog('info', `No cached binary found for ${block.name} — compiling...`);
+          }
+        } else {
+          addLog('info', `Recompile enabled for ${block.name} — forcing rebuild`);
+        }
+
+        if (needsCompile) {
+          if (isCudaBlock(block)) {
+            const nvccCheck = await window.electronAPI.execCommand('nvcc --version', projectDir);
+            if (!nvccCheck.success) {
+              throw new Error(
+                `nvcc not found on PATH. Please install the CUDA Toolkit and ensure nvcc.exe is on your system PATH.`
+              );
+            }
+            addLog('info', `nvcc found: ${(nvccCheck.stdout || '').split('\n')[0].trim()}`);
+          }
+
+          const compileCmd = buildCompileCommand(block, projectDir);
+          addLog('info', `Compiling ${block.fileName} [${label}]...`);
+          addLog('info', `Compile command: ${compileCmd}`);
+
+          const r = await window.electronAPI.execCommand(compileCmd, `${projectDir}/cpp_blocks`);
+
+          if (!r.success) {
+            if (r.stderr) addLog('error', `${label} compiler output:\n${r.stderr}`);
+            if (r.stdout) addLog('error', `${label} compiler stdout:\n${r.stdout}`);
+            throw new Error(`${label} compilation failed for ${block.fileName}:\n${r.stderr || r.error}`);
+          }
+          addLog('success', `Compiled ${block.fileName} → bin/${exeName}`);
+        }
       }
 
       const parsed = buildBlockArgs(block, connections);

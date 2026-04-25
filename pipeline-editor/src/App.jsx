@@ -288,7 +288,6 @@ const PipelineEditor = () => {
         case 'BLOCK_READY':
           addLog('success', `[${blockName}] [${language}] Ready`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'ready' }));
-          // Signal the waiting Promise in useServerOperations directly.
           signalBlockReady(blockId);
           setBlockProcesses(prev => {
             const blockEntry = Object.entries(prev).find(([key, proc]) => 
@@ -318,7 +317,6 @@ const PipelineEditor = () => {
           break;
           
         case 'BLOCK_GRAPH':
-          // Single-point accumulating graph (existing behaviour — untouched)
           const graphPoint = { x: data.x, y: data.y };
           setGraphData(prev => {
             const existing = prev[blockId] || { xData: [], yData: [] };
@@ -343,24 +341,18 @@ const PipelineEditor = () => {
           break;
 
         case 'BLOCK_GRAPH_BATCH':
-          // Batch scatter plot — REPLACE previous points entirely (no accumulation).
-          // message.points is an array of [I, Q] pairs sent by scatter_plot.cpp.
-          // We store them as { xData: [...], yData: [...] } to reuse GraphWindow.
           {
             const incomingPoints = message.points || data?.points || [];
             const xData = incomingPoints.map(p => p[0]);
             const yData = incomingPoints.map(p => p[1]);
 
-            // Replace — not append
             setGraphData(prev => ({
               ...prev,
               [blockId]: { xData, yData }
             }));
 
-            // Auto-open a graph window for this block if not already open.
-            // We use blockName from the message (set to the C++ block's config.name).
             setGraphWindows(prev => {
-              if (prev[blockId]) return prev;   // already open
+              if (prev[blockId]) return prev;
               return {
                 ...prev,
                 [blockId]: { blockName: blockName || `Block ${blockId}`, graphType: 'scatter' }
@@ -372,7 +364,6 @@ const PipelineEditor = () => {
         case 'BLOCK_ERROR':
           addLog('error', `[${blockName}] [${language}] ${data.error || data.status || 'Error'}`);
           setBlockStatus(prev => ({ ...prev, [blockId]: 'error' }));
-          // Reject the waiting Promise so startup doesn't hang on errored blocks
           signalBlockError(blockId, data.error || data.status || 'Block error');
           break;
           
@@ -399,7 +390,7 @@ const PipelineEditor = () => {
     };
   }, []);
 
-  // Auto-open graph windows for blocks flagged as isGraph (existing BLOCK_GRAPH flow)
+  // Auto-open graph windows for blocks flagged as isGraph
   useEffect(() => {
     Object.entries(graphData).forEach(([blockId, data]) => {
       if (!graphWindows[blockId]) {
@@ -496,7 +487,6 @@ const PipelineEditor = () => {
     const block = selectedBlocks[0];
     
     try {
-      // RE-PARSE the block with updated code based on language
       let reparsedData;
       if (block.language === 'matlab') {
         reparsedData = parseMatlabBlock(updatedCode, block.fileName);
@@ -506,7 +496,6 @@ const PipelineEditor = () => {
         throw new Error(`Unsupported language: ${block.language}`);
       }
       
-      // Calculate new port positions
       const newPortPositions = calculatePortPositions(
         reparsedData.inputs, 
         reparsedData.outputs, 
@@ -516,7 +505,6 @@ const PipelineEditor = () => {
         GRID_SIZE
       );
       
-      // Create updated block with ALL new batch processing fields
       const updatedBlock = { 
         ...block, 
         code: updatedCode,
@@ -524,8 +512,6 @@ const PipelineEditor = () => {
         inputs: reparsedData.inputs,
         outputs: reparsedData.outputs,
         config: reparsedData.config,
-        
-        // BATCH PROCESSING FIELDS
         inputPacketSizes: reparsedData.inputPacketSizes,
         inputBatchSizes: reparsedData.inputBatchSizes,
         outputPacketSizes: reparsedData.outputPacketSizes,
@@ -534,14 +520,11 @@ const PipelineEditor = () => {
         outputBufferSizes: reparsedData.outputBufferSizes,
         inputLengthBytes: reparsedData.inputLengthBytes,
         outputLengthBytes: reparsedData.outputLengthBytes,
-        
-        // Legacy fields
         sizeRelation: reparsedData.sizeRelation,
         inputSize: reparsedData.inputSize,
         outputSize: reparsedData.outputSize,
         inputSizes: reparsedData.inputSizes,
         outputSizes: reparsedData.outputSizes,
-        
         portPositions: newPortPositions,
         ltr: reparsedData.ltr,
         startWithAll: reparsedData.startWithAll,
@@ -549,20 +532,15 @@ const PipelineEditor = () => {
         graphType: reparsedData.graphType,
         description: reparsedData.description,
         language: reparsedData.language || block.language
+        // NOTE: recompile is intentionally not overwritten here — it's a UI-only setting
       };
       
-      // Check if any connections need to be removed due to port changes
       const removedConnections = connections.filter(conn => {
-        if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) {
-          return true;
-        }
-        if (conn.toBlock === block.id && conn.toPort >= reparsedData.inputs) {
-          return true;
-        }
+        if (conn.fromBlock === block.id && conn.fromPort >= reparsedData.outputs) return true;
+        if (conn.toBlock === block.id && conn.toPort >= reparsedData.inputs) return true;
         return false;
       });
       
-      // Check if any existing connections have size mismatches
       const invalidConnections = connections.filter(conn => {
         if (conn.fromBlock === block.id) {
           const toBlock = blocks.find(b => b.id === conn.toBlock);
@@ -571,13 +549,9 @@ const PipelineEditor = () => {
             const outputBatchSize = reparsedData.outputBatchSizes[conn.fromPort];
             const inputPacketSize = toBlock.inputPacketSizes[conn.toPort];
             const inputBatchSize = toBlock.inputBatchSizes[conn.toPort];
-            
-            if (outputPacketSize !== inputPacketSize || outputBatchSize !== inputBatchSize) {
-              return true;
-            }
+            if (outputPacketSize !== inputPacketSize || outputBatchSize !== inputBatchSize) return true;
           }
         }
-        
         if (conn.toBlock === block.id) {
           const fromBlock = blocks.find(b => b.id === conn.fromBlock);
           if (fromBlock) {
@@ -585,13 +559,9 @@ const PipelineEditor = () => {
             const inputBatchSize = reparsedData.inputBatchSizes[conn.toPort];
             const outputPacketSize = fromBlock.outputPacketSizes[conn.fromPort];
             const outputBatchSize = fromBlock.outputBatchSizes[conn.fromPort];
-            
-            if (inputPacketSize !== outputPacketSize || inputBatchSize !== outputBatchSize) {
-              return true;
-            }
+            if (inputPacketSize !== outputPacketSize || inputBatchSize !== outputBatchSize) return true;
           }
         }
-        
         return false;
       });
       
@@ -607,7 +577,6 @@ const PipelineEditor = () => {
         updateBlocksWithHistory(newBlocks);
       }
       
-      // SAVE TO DISK IMMEDIATELY
       const filePath = block.language === 'matlab' 
         ? `${projectDir}/matlab_blocks/${block.fileName}`
         : `${projectDir}/cpp_blocks/${block.fileName}`;
@@ -688,6 +657,13 @@ const PipelineEditor = () => {
           const newBlocks = blocks.map(b => b.id === block.id ? updated : b);
           updateBlocksWithHistory(newBlocks);
           setSelectedBlocks([updated]);
+        }}
+        onBlockRecompileChange={(block, recompile) => {
+          const updated = { ...block, recompile };
+          const newBlocks = blocks.map(b => b.id === block.id ? updated : b);
+          updateBlocksWithHistory(newBlocks);
+          setSelectedBlocks([updated]);
+          addLog('info', `${block.name}: recompile set to ${recompile}`);
         }}
         onKillProcess={async (pid, name) => {
           const result = await window.electronAPI.killProcess(pid);

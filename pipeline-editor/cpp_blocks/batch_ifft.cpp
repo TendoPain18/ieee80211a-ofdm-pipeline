@@ -23,7 +23,7 @@
 //   out[1]: Scatter plot data  (200 MB pipe, variable fill)
 // ============================================================
 
-static const bool SCATTER_ENABLED  = true;
+static const bool SCATTER_ENABLED  = false;
 static const int  SCATTER_PACKETS  = 1;
 static const bool PLOT_STS         = false;
 static const bool PLOT_LTS         = false;

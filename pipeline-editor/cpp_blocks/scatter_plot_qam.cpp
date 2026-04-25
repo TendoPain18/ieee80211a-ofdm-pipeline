@@ -243,7 +243,7 @@ int main(int argc, char* argv[]) {
         {1},                  // inputBatchSizes   [1 big packet per batch]
         {},                   // outputPacketSizes
         {},                   // outputBatchSizes
-        true,                // ltr
+        false,                // ltr
         true,                 // startWithAll
         "Scatter plot sink: reads filtered IQ data and sends JSON batch to Electron"
     };

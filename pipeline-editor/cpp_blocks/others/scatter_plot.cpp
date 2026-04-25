@@ -114,8 +114,14 @@ ScatterPlotData init_scatter_plot(const BlockConfig& config) {
     data.blockName[sizeof(data.blockName) - 1] = '\0';
 
     if (ENABLED) {
+        // Only attempt socket connection when scatter is actually enabled.
+        // Avoids 20 failed connect() calls (and ~6 s delay) when disabled.
         data.rawSock     = connectRawSocket(data.cppPort, 20);
         data.socketReady = (data.rawSock != INVALID_SOCKET);
+        printf("[ScatterPlot] Scatter ENABLED — socket %s (port %d)\n",
+               data.socketReady ? "connected" : "NOT connected (will retry)", data.cppPort);
+    } else {
+        printf("[ScatterPlot] Scatter DISABLED — pipe drained, no socket opened\n");
     }
     return data;
 }

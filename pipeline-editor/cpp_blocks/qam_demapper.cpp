@@ -305,7 +305,7 @@ int main(int argc, char* argv[]) {
         {64, 64},       // inputBatchSizes
         {3029, 6},      // outputPacketSizes [rate+lip_bits(uint32 LE)+DATA_INT(3024)=3029, SIGNAL_INT(6)]
         {64, 64},       // outputBatchSizes
-        false,          // ltr
+        true,          // ltr
         true,           // startWithAll
         "IEEE 802.11a QAM Demapper: lip in bits (uint32 LE), 3029-byte data output"
     };

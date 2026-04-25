@@ -5,39 +5,33 @@
 #include <string>
 
 // ============================================================
-// Scatter Plot Block  (sink — no outputs)
+// Scatter Plot Sink — Channel Equalizer output
 //
-// Reads pre-filtered IQ data from a 200 MB scatter pipe.
+// Identical in structure to scatter_plot_fft / scatter_plot_qam.
+// Reads the 200 MB scatter pipe written by channel_equalizer
+// and streams IQ points to the Electron UI as JSON.
 //
-// Wire format written by upstream block:
-//   Bytes [0..3] : uint32_t LE = actual IQ bytes that follow
-//   Bytes [4..]  : IQ samples  [I_lo, I_hi, Q_lo, Q_hi] per sample
-//                  int8 convention: pipe byte = int8_t(uint8_t(B) - 128)
+// Wire format (written by channel_equalizer):
+//   Bytes [0..3] : uint32_t LE = actual IQ data bytes that follow
+//   Bytes [4..]  : IQ samples  [I_lo, I_hi, Q_lo, Q_hi]
+//                  int8 convention: pipe byte = int8_t(uint8_t(B) − 128)
 //
-// Behaviour:
-//   ENABLED=true  -> decode all IQ pairs, send single JSON batch to Electron
-//   ENABLED=false -> read and discard silently (no socket traffic)
-//
-// JSON message (newline-terminated):
+// JSON sent per batch (newline-terminated):
 //   {"protocol":"CPP_V1","type":"BLOCK_GRAPH_BATCH",
-//    "blockId":<N>,"blockName":"<name>",
-//    "points":[[I,Q],...]}
+//    "blockId":<N>,"blockName":"<name>","points":[[I,Q],...]}
 //
-// Inputs  : 1  (200 MB scatter pipe, batchSize=1)
+// Set ENABLED = false to silently drain the pipe without any
+// socket/JSON overhead (useful for performance runs).
+//
+// Inputs  : 1  (200 MB scatter pipe, batchSize = 1)
 // Outputs : 0  (sink)
 // ============================================================
 
-// -----------------------------------------------------------------------
-// *** USER CONFIGURATION ***
-// -----------------------------------------------------------------------
-static const bool ENABLED = true;   // false = silently discard every batch
+static const bool ENABLED = true;   // false → drain silently
 
-// -----------------------------------------------------------------------
-// Constants
-// -----------------------------------------------------------------------
-static const int SCATTER_PIPE_BYTES = 209715200; // 200 MB
+static const int SCATTER_PIPE_BYTES = 209715200;
 static const int BYTES_PER_SAMPLE   = 4;
-static const int HEADER_BYTES       = 4;         // uint32 LE size prefix
+static const int HEADER_BYTES       = 4;   // uint32 LE size prefix
 
 // -----------------------------------------------------------------------
 // Unpack one IQ pair from 4 pipe bytes → double [-1, +1]
@@ -81,20 +75,20 @@ static SOCKET connectRawSocket(int port, int maxRetries) {
         inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
         if (::connect(s, (sockaddr*)&addr, sizeof(addr)) == 0) {
-            printf("[ScatterPlot] Connected to CPP_PORT=%d\n", port);
+            printf("[ScatterPlotEq] Connected to CPP_PORT=%d\n", port);
             return s;
         }
         closesocket(s);
         Sleep(300);
     }
-    fprintf(stderr, "[ScatterPlot] WARNING: Could not connect to CPP_PORT=%d\n", port);
+    fprintf(stderr, "[ScatterPlotEq] WARNING: Could not connect to CPP_PORT=%d\n", port);
     return INVALID_SOCKET;
 }
 
 // -----------------------------------------------------------------------
 // Block state
 // -----------------------------------------------------------------------
-struct ScatterPlotData {
+struct ScatterPlotEqData {
     int    frameCount;
     int    blockId;
     int    cppPort;
@@ -103,8 +97,8 @@ struct ScatterPlotData {
     char   blockName[64];
 };
 
-ScatterPlotData init_scatter_plot(const BlockConfig& config) {
-    ScatterPlotData data;
+ScatterPlotEqData init_scatter_plot_eq(const BlockConfig& config) {
+    ScatterPlotEqData data;
     data.frameCount  = 0;
     data.blockId     = getEnvInt("BLOCK_ID", 0);
     data.cppPort     = getEnvInt("CPP_PORT", 9002);
@@ -120,14 +114,14 @@ ScatterPlotData init_scatter_plot(const BlockConfig& config) {
     return data;
 }
 
-void process_scatter_plot(
-    const char**       pipeIn,
-    const char**       /*pipeOut*/,
-    ScatterPlotData&   customData,
-    const BlockConfig& config
-) {
-    const int inPktSize   = config.inputPacketSizes[0];  // SCATTER_PIPE_BYTES
-    const int inBatch     = config.inputBatchSizes[0];   // 1
+void process_scatter_plot_eq(
+    const char**        pipeIn,
+    const char**        /*pipeOut*/,
+    ScatterPlotEqData&  customData,
+    const BlockConfig&  config)
+{
+    const int inPktSize   = config.inputPacketSizes[0];
+    const int inBatch     = config.inputBatchSizes[0];
     const int lengthBytes = calculateLengthBytes(inBatch);
     const int totalBuf    = lengthBytes + inPktSize * inBatch;
 
@@ -143,18 +137,15 @@ void process_scatter_plot(
 
     customData.frameCount++;
 
-    // Packet starts after the PipeIO length header
     const uint8_t* pkt = (const uint8_t*)(rawBuf + lengthBytes);
 
-    // Extract 4-byte LE uint32 actual IQ data size
+    // Extract uint32 LE actual IQ data size
     uint32_t iqDataBytes = 0;
     iqDataBytes |= (uint32_t)pkt[0];
     iqDataBytes |= (uint32_t)pkt[1] << 8;
     iqDataBytes |= (uint32_t)pkt[2] << 16;
     iqDataBytes |= (uint32_t)pkt[3] << 24;
 
-    // When ENABLED=false: upstream wrote a zero-header packet just to unblock us.
-    // Discard immediately — no parsing, no socket, no JSON.
     if (!ENABLED) {
         delete[] rawBuf;
         return;
@@ -165,10 +156,10 @@ void process_scatter_plot(
         return;
     }
 
-    // Clamp to available data
+    // Clamp to what was actually written
     uint32_t maxIq = (uint32_t)(inPktSize - HEADER_BYTES);
     if (iqDataBytes > maxIq) {
-        fprintf(stderr, "[ScatterPlot] clamping iqDataBytes %u -> %u\n",
+        fprintf(stderr, "[ScatterPlotEq] clamping iqDataBytes %u -> %u\n",
                 iqDataBytes, maxIq);
         iqDataBytes = maxIq;
     }
@@ -181,11 +172,7 @@ void process_scatter_plot(
         return;
     }
 
-    // ------------------------------------------------------------------
-    // Build JSON in a single string:
-    // {"protocol":"CPP_V1","type":"BLOCK_GRAPH_BATCH","blockId":N,
-    //  "blockName":"...","points":[[I,Q],...]}
-    // ------------------------------------------------------------------
+    // Build JSON
     std::string json;
     json.reserve((size_t)numSamples * 28 + 200);
 
@@ -213,9 +200,9 @@ void process_scatter_plot(
 
     json += "]}\n";
 
-    // Send; on failure reconnect once and retry
+    // Send; reconnect once on failure
     if (!tcpSend(customData.rawSock, json.c_str(), (int)json.size())) {
-        fprintf(stderr, "[ScatterPlot] Send failed — reconnecting...\n");
+        fprintf(stderr, "[ScatterPlotEq] Send failed — reconnecting...\n");
         closesocket(customData.rawSock);
         customData.rawSock     = connectRawSocket(customData.cppPort, 5);
         customData.socketReady = (customData.rawSock != INVALID_SOCKET);
@@ -228,7 +215,7 @@ void process_scatter_plot(
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: scatter_plot <pipeInScatter>\n");
+        fprintf(stderr, "Usage: scatter_plot_eq <pipeInScatter>\n");
         return 1;
     }
 
@@ -236,18 +223,20 @@ int main(int argc, char* argv[]) {
     const char* pipeOuts[] = {};
 
     BlockConfig config = {
-        "ScatterPlot",
-        1,                    // inputs
-        0,                    // outputs (sink)
-        {209715200},                  // inputPacketSizes  [200MB scatter pipe]
-        {1},                  // inputBatchSizes   [1 big packet per batch]
-        {},                   // outputPacketSizes
-        {},                   // outputBatchSizes
-        false,                // ltr
-        true,                 // startWithAll
-        "Scatter plot sink: reads filtered IQ data and sends JSON batch to Electron"
+        "ScatterPlotEq",
+        1,             // inputs
+        0,             // outputs (sink)
+        {209715200},   // inputPacketSizes  [200 MB scatter pipe]
+        {1},           // inputBatchSizes
+        {},            // outputPacketSizes
+        {},            // outputBatchSizes
+        true,          // ltr
+        true,          // startWithAll
+        "Scatter plot sink for channel equalizer output"
     };
 
-    run_manual_block(pipeIns, pipeOuts, config, process_scatter_plot, init_scatter_plot);
+    run_manual_block(pipeIns, pipeOuts, config,
+                     process_scatter_plot_eq,
+                     init_scatter_plot_eq);
     return 0;
 }

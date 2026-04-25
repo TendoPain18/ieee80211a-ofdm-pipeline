@@ -7,25 +7,42 @@ output_file = os.path.join(folder_path, "project_files.txt")
 with open(output_file, "w", encoding="utf-8") as out_file:
     for root, dirs, files in os.walk(folder_path):
         # Skip folders
-        for skip_dir in ["node_modules", "dist", ".vite", "Output_Files", "Test_Files", ".git", "matlab_blocks"]:
+        for skip_dir in ["node_modules",
+                        "src",
+                        "dist",
+                        ".vite", 
+                        "Output_Files", 
+                        "Test_Files", 
+                        ".git", 
+                        "matlab_blocks", 
+                        "temp test"
+                        ]:
             if skip_dir in dirs:
                 dirs.remove(skip_dir)
 
         # Skip specific files
         skip_files = {
+            "forge.config.js",
+            "index.html",
             "package-lock.json",
-            "pipeline_diagram.psd",
-            "project_files - Copy.txt",
+            "package.json",
+            "postcss.config.js",
+            "project_files.txt",
+            "tailwind.config.js",
+            "test.py",
+            "vite.main.config.mjs",
+            "vite.preload.config.mjs",
+            "vite.renderer.config.mjs"
+
+            # "pipeline_diagram.psd",
             "icon.ico",
             ".gitignore",
-            "test.py",
-            "project_files.txt",
             "block_template2",
             "block_template3",
             "block_template4",
-            # "pipe_server.exe",
-            # "pipeline_config.h",
-            # "pipeline_mex.mexw64",
+            "pipe_server.exe",
+            "pipeline_config.h",
+            "pipeline_mex.mexw64",
         }
 
         files = [f for f in files if f not in skip_files]

@@ -14,6 +14,7 @@ export const Sidebar = ({
   onEditCode,
   onDelete,
   onBlockColorChange,
+  onBlockRecompileChange,
   onKillProcess,
   onClearLog
 }) => {
@@ -61,6 +62,15 @@ export const Sidebar = ({
                     <p className="text-base font-semibold text-gray-900">{selectedBlocks[0].outputs}</p>
                   </div>
                 </div>
+
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Language</label>
+                  <p className="text-base font-semibold text-gray-900">
+                    {selectedBlocks[0].language === 'cpp'
+                      ? (selectedBlocks[0].isCuda ? 'CUDA (.cu)' : 'C++ (.cpp)')
+                      : 'MATLAB (.m)'}
+                  </p>
+                </div>
                 
                 <div>
                   <label className="text-sm font-medium text-gray-700">Color</label>
@@ -74,6 +84,35 @@ export const Sidebar = ({
                     />
                   </div>
                 </div>
+
+                {/* Recompile toggle — only for C++ / CUDA blocks */}
+                {selectedBlocks[0].language === 'cpp' && (
+                  <div>
+                    <label className="text-sm font-medium text-gray-700">Recompile on Start</label>
+                    <div className="flex items-center gap-3 mt-1">
+                      <button
+                        onClick={() => onBlockRecompileChange(selectedBlocks[0], !selectedBlocks[0].recompile)}
+                        className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none ${
+                          selectedBlocks[0].recompile ? 'bg-orange-500' : 'bg-gray-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                            selectedBlocks[0].recompile ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                      <span className={`text-sm font-semibold ${selectedBlocks[0].recompile ? 'text-orange-600' : 'text-gray-500'}`}>
+                        {selectedBlocks[0].recompile ? 'Always recompile' : 'Use cached binary'}
+                      </span>
+                    </div>
+                    {selectedBlocks[0].recompile && (
+                      <p className="text-xs text-orange-500 mt-1">
+                        ⚠ Will recompile every time you press Start
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             

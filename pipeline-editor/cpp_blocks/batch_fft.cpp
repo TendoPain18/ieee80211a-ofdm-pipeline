@@ -272,7 +272,7 @@ int main(int argc, char* argv[]) {
         {64},                         // inputBatchSizes
         {129024, 209715200},          // outputPacketSizes [freq, scatter 200MB]
         {64, 1},                      // outputBatchSizes
-        false,                        // ltr
+        true,                        // ltr
         true,                         // startWithAll
         "IEEE 802.11a Batch FFT with scatter output"
     };
